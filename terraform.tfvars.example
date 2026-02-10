@@ -1,0 +1,14 @@
+
+# Copy to terraform.tfvars and edit values as needed
+subscription_id     = "<GUID>"
+resource_group_name = "rg-mlapps-dev"
+name_prefix         = "contoso"
+environment         = "dev"
+location            = "eastus"
+foundry_sku_name    = "S0"
+
+# You may need to add any required tags (by Azure Policy)
+tags = {
+  owner = "analytics-architecture"
+  cost  = "ai-foundry-pilot"
+}
