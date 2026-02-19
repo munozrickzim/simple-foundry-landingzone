@@ -28,8 +28,8 @@ output "data_plane_resources" {
 
 output "app_service_plans" {
   description = "App Service Plan names (if created)."
-  value = var.create_app_service_plans ? {
-    functions_plan = azurerm_service_plan.func[0].name
-    web_plan       = azurerm_service_plan.web[0].name
-  } : null
+  value = {
+    functions_plan = length(azurerm_service_plan.func) > 0 ? azurerm_service_plan.func[0].name : null
+    web_plan       = length(azurerm_service_plan.web) > 0 ? azurerm_service_plan.web[0].name : null
+  }
 }
