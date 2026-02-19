@@ -3,58 +3,44 @@
 data "azurerm_client_config" "current" {}
 
 locals {
-  prefix = lower(var.name_prefix)
-  env    = lower(var.environment)
+  workload = lower(var.workload)
+  env      = lower(var.environment)
 
-  base_hyphen = "${local.prefix}-${local.env}"
-  base_nodash = "${local.prefix}${local.env}"
-
-  suffix = {
-    rg    = "rg"
-    st    = "st"
-    law   = "law"
-    appi  = "appi"
-    kv    = "kv"
-    cos   = "cos"
-    srch  = "srch"
-    asp   = "asp"
-    aspfn = "aspfn"
-    aif   = "aif"   // Foundry (AIServices) account
-    cs    = "cs"    // Content Safety
-    di    = "di"    // Document Intelligence
-    lang  = "lang"  // Language
-    spch  = "spch"  // Speech
-  }
+  base_hyphen = "${local.env}-${local.regions[var.location]}-${var.workload}"
+  basenohyphen = "${local.env}${local.regions[var.location]}${var.workload}"
 
   // Names per resource constraints
-  storage_account_name = substr("${local.base_nodash}${local.suffix.st}", 0, 24)
-  key_vault_name       = substr("${local.base_hyphen}-${local.suffix.kv}", 0, 24)
-  cosmos_account_name  = substr("${local.base_nodash}${local.suffix.cos}", 0, 44)
-  search_service_name  = substr("${local.base_hyphen}-${local.suffix.srch}", 0, 60)
+  storage_account_name = substr("${local.resource_abbreviations.storage_account}${local.basenohyphen}1", 0, 24)
+  key_vault_name       = substr("${local.resource_abbreviations.key_vault}-${local.base_hyphen}-1", 0, 24)
+  cosmos_account_name  = substr("${local.resource_abbreviations.azure_cosmos_db_database}${local.basenohyphen}-1", 0, 44)
+  search_service_name  = substr("${local.resource_abbreviations.ai_search}-${local.base_hyphen}-1", 0, 60)
 
-  appi_name = "${local.base_hyphen}-${local.suffix.appi}"
-  law_name  = "${local.base_hyphen}-${local.suffix.law}"
+  appi_name = "${local.resource_abbreviations.application_insights}-${local.base_hyphen}-1"
+  law_name  = "${local.resource_abbreviations.log_analytics_workspace}-${local.base_hyphen}-1"
 
-  plan_func_name = "${local.base_hyphen}-${local.suffix.aspfn}"
-  plan_web_name  = "${local.base_hyphen}-${local.suffix.asp}"
+  plan_func_name = "${local.resource_abbreviations.app_service_plan}-${local.base_hyphen}-func-1"
+  plan_web_name  = "${local.resource_abbreviations.app_service_plan}-${local.base_hyphen}-web-1"
 
   // Cognitive Services: prefer lowercase, no hyphens
-  cog_cs_name   = substr("${local.base_nodash}${local.suffix.cs}",   0, 64)
-  cog_di_name   = substr("${local.base_nodash}${local.suffix.di}",   0, 64)
-  cog_lang_name = substr("${local.base_nodash}${local.suffix.lang}", 0, 64)
-  cog_spch_name = substr("${local.base_nodash}${local.suffix.spch}", 0, 64)
+  cog_cs_name   = substr("${local.resource_abbreviations.content_safety}${local.basenohyphen}-1",   0, 64)
+  cog_di_name   = substr("${local.resource_abbreviations.document_intelligence}${local.basenohyphen}-1",   0, 64)
+  cog_lang_name = substr("${local.resource_abbreviations.language_service}${local.basenohyphen}-1", 0, 64)
+  cog_spch_name = substr("${local.resource_abbreviations.speech_service}${local.basenohyphen}-1", 0, 64)
 
   // Foundry (AIServices) account allows hyphens
-  foundry_name  = "${local.base_hyphen}-${local.suffix.aif}"
+  foundry_name  = "${local.resource_abbreviations.foundry_account}-${local.base_hyphen}-1"
+  openai_name   = "${local.resource_abbreviations.azure_openai_service}-${local.base_hyphen}-1"
+  
+  resource_group_name = "${local.resource_abbreviations.resource_group}-${local.base_hyphen}"
 }
 
 // ------------------------
 // Resource Group
 // ------------------------
 resource "azurerm_resource_group" "rg" {
-  name     = var.resource_group_name
+  name     = local.resource_group_name
   location = var.location
-  tags     = merge(var.tags, { env = local.env, prefix = local.prefix, role = "landing" })
+  tags     = merge(var.tags, { env = local.env, workload = local.workload, role = "landing" })
 }
 
 // ------------------------
@@ -85,6 +71,36 @@ resource "azapi_resource" "foundry" {
 // Capture the Foundry principalId for RBAC
 locals {
   foundry_principal_id = azapi_resource.foundry.identity[0].principal_id
+}
+
+// ------------------------
+// Azure OpenAI Service with System-Assigned Managed Identity
+// ------------------------
+resource "azapi_resource" "openai" {
+  type      = "Microsoft.CognitiveServices/accounts@2025-09-01"
+  name      = local.openai_name
+  location  = azurerm_resource_group.rg.location
+  parent_id = azurerm_resource_group.rg.id
+
+  identity {
+    type = "SystemAssigned"
+  }
+
+  body = {
+    kind = "OpenAI"
+    sku  = { name = var.openai_sku_name }
+    properties = {
+      publicNetworkAccess = "Enabled"
+      disableLocalAuth    = true
+    }
+  }
+
+  tags = var.tags
+}
+
+// Capture the OpenAI principalId for RBAC
+locals {
+  openai_principal_id = azapi_resource.openai.identity[0].principal_id
 }
 
 // ------------------------
@@ -285,6 +301,14 @@ resource "azurerm_role_assignment" "foundry_storage_blob_contrib" {
   depends_on          = [azapi_resource.foundry]
   scope                = azurerm_storage_account.st.id
   role_definition_name = "Storage Blob Data Contributor"
+  principal_id         = local.foundry_principal_id
+}
+
+// Azure OpenAI -> Cognitive Services User
+resource "azurerm_role_assignment" "foundry_openai_user" {
+  depends_on           = [azapi_resource.foundry, azapi_resource.openai]
+  scope                = azapi_resource.openai.id
+  role_definition_name = "Cognitive Services User"
   principal_id         = local.foundry_principal_id
 }
 

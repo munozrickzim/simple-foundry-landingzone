@@ -1,8 +1,7 @@
 
 # Copy to terraform.tfvars and edit values as needed
 subscription_id     = "<GUID>"
-resource_group_name = "rg-mlapps-dev"
-name_prefix         = "contoso"
+workload            = "contoso"
 environment         = "dev"
 location            = "eastus"
 foundry_sku_name    = "S0"
