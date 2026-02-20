@@ -4,6 +4,7 @@ subscription_id     = "<GUID>"
 workload            = "contoso"
 environment         = "dev"
 location            = "eastus"
+resource_group_name = "rg-dev-eastus-contoso-1" # existing resource group
 foundry_sku_name    = "S0"
 
 # You may need to add any required tags (by Azure Policy)

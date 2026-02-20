@@ -6,8 +6,8 @@ locals {
   workload = lower(var.workload)
   env      = lower(var.environment)
 
-  base_hyphen = "${local.env}-${local.regions[var.location]}-${var.workload}"
-  basenohyphen = "${local.env}${local.regions[var.location]}${var.workload}"
+  base_hyphen  = "${local.env}-${local.regions[var.location]}-${local.workload}"
+  basenohyphen = "${local.env}${local.regions[var.location]}${local.workload}"
 
   // Names per resource constraints
   storage_account_name = substr("${local.resource_abbreviations.storage_account}${local.basenohyphen}1", 0, 24)
@@ -30,17 +30,20 @@ locals {
   // Foundry (AIServices) account allows hyphens
   foundry_name  = "${local.resource_abbreviations.foundry_account}-${local.base_hyphen}-1"
   openai_name   = "${local.resource_abbreviations.azure_openai_service}-${local.base_hyphen}-1"
-  
-  resource_group_name = "${local.resource_abbreviations.resource_group}-${local.base_hyphen}"
+
+  resource_group_name_generated = "${local.resource_abbreviations.resource_group}-${local.base_hyphen}"
+  resource_group_name_effective = length(trimspace(var.resource_group_name)) > 0 ? var.resource_group_name : local.resource_group_name_generated
 }
 
 // ------------------------
-// Resource Group
+// Existing Resource Group (must already exist)
 // ------------------------
-resource "azurerm_resource_group" "rg" {
-  name     = local.resource_group_name
-  location = var.location
-  tags     = merge(var.tags, { env = local.env, workload = local.workload, role = "landing" })
+data "azurerm_resource_group" "rg" {
+  name = local.resource_group_name_effective
+}
+
+locals {
+  resource_group_location = data.azurerm_resource_group.rg.location
 }
 
 // ------------------------
@@ -49,8 +52,8 @@ resource "azurerm_resource_group" "rg" {
 resource "azapi_resource" "foundry" {
   type      = "Microsoft.CognitiveServices/accounts@2025-09-01"
   name      = local.foundry_name
-  location  = azurerm_resource_group.rg.location
-  parent_id = azurerm_resource_group.rg.id
+  location  = local.resource_group_location
+  parent_id = data.azurerm_resource_group.rg.id
 
   identity {
     type = "SystemAssigned"
@@ -79,8 +82,8 @@ locals {
 resource "azapi_resource" "openai" {
   type      = "Microsoft.CognitiveServices/accounts@2025-09-01"
   name      = local.openai_name
-  location  = azurerm_resource_group.rg.location
-  parent_id = azurerm_resource_group.rg.id
+  location  = local.resource_group_location
+  parent_id = data.azurerm_resource_group.rg.id
 
   identity {
     type = "SystemAssigned"
@@ -98,18 +101,13 @@ resource "azapi_resource" "openai" {
   tags = var.tags
 }
 
-// Capture the OpenAI principalId for RBAC
-locals {
-  openai_principal_id = azapi_resource.openai.identity[0].principal_id
-}
-
 // ------------------------
 // Storage Account (V2, LRS)
 // ------------------------
 resource "azurerm_storage_account" "st" {
   name                            = local.storage_account_name
-  resource_group_name             = azurerm_resource_group.rg.name
-  location                        = azurerm_resource_group.rg.location
+  resource_group_name             = local.resource_group_name_effective
+  location                        = local.resource_group_location
   account_tier                    = "Standard"
   account_replication_type        = "LRS"
   account_kind                    = "StorageV2"
@@ -123,8 +121,8 @@ resource "azurerm_storage_account" "st" {
 // ------------------------
 resource "azurerm_log_analytics_workspace" "law" {
   name                = local.law_name
-  resource_group_name = azurerm_resource_group.rg.name
-  location            = azurerm_resource_group.rg.location
+  resource_group_name = local.resource_group_name_effective
+  location            = local.resource_group_location
   sku                 = "PerGB2018"
   retention_in_days   = 30
   tags                = var.tags
@@ -132,8 +130,8 @@ resource "azurerm_log_analytics_workspace" "law" {
 
 resource "azurerm_application_insights" "appi" {
   name                = local.appi_name
-  resource_group_name = azurerm_resource_group.rg.name
-  location            = azurerm_resource_group.rg.location
+  resource_group_name = local.resource_group_name_effective
+  location            = local.resource_group_location
   application_type    = "web"
   workspace_id        = azurerm_log_analytics_workspace.law.id
   tags                = var.tags
@@ -144,8 +142,8 @@ resource "azurerm_application_insights" "appi" {
 // ------------------------
 resource "azurerm_key_vault" "kv" {
   name                       = local.key_vault_name
-  resource_group_name        = azurerm_resource_group.rg.name
-  location                   = azurerm_resource_group.rg.location
+  resource_group_name        = local.resource_group_name_effective
+  location                   = local.resource_group_location
   tenant_id                  = data.azurerm_client_config.current.tenant_id
   sku_name                   = "standard"
   soft_delete_retention_days = 7
@@ -159,15 +157,15 @@ resource "azurerm_key_vault" "kv" {
 // ------------------------
 resource "azurerm_cosmosdb_account" "cos" {
   name                          = local.cosmos_account_name
-  resource_group_name           = azurerm_resource_group.rg.name
-  location                      = azurerm_resource_group.rg.location
+  resource_group_name           = local.resource_group_name_effective
+  location                      = local.resource_group_location
   offer_type                    = "Standard"
   kind                          = "GlobalDocumentDB"
   local_authentication_disabled = true
 
   consistency_policy { consistency_level = "Session" }
   geo_location {
-    location          = azurerm_resource_group.rg.location
+    location          = local.resource_group_location
     failover_priority = 0
   }
 
@@ -179,8 +177,8 @@ resource "azurerm_cosmosdb_account" "cos" {
 // ------------------------
 resource "azurerm_search_service" "srch" {
   name                         = local.search_service_name
-  resource_group_name          = azurerm_resource_group.rg.name
-  location                     = azurerm_resource_group.rg.location
+  resource_group_name          = local.resource_group_name_effective
+  location                     = local.resource_group_location
   sku                          = "standard"    // S1
   replica_count                = 1
   partition_count              = 1
@@ -195,8 +193,8 @@ resource "azurerm_search_service" "srch" {
 resource "azurerm_service_plan" "func" {
   count               = var.create_app_service_plans ? 1 : 0
   name                = local.plan_func_name
-  resource_group_name = azurerm_resource_group.rg.name
-  location            = azurerm_resource_group.rg.location
+  resource_group_name = local.resource_group_name_effective
+  location            = local.resource_group_location
   os_type             = "Linux"
   sku_name            = "EP1"         // Functions Premium
   tags                = var.tags
@@ -205,8 +203,8 @@ resource "azurerm_service_plan" "func" {
 resource "azurerm_service_plan" "web" {
   count               = var.create_app_service_plans ? 1 : 0
   name                = local.plan_web_name
-  resource_group_name = azurerm_resource_group.rg.name
-  location            = azurerm_resource_group.rg.location
+  resource_group_name = local.resource_group_name_effective
+  location            = local.resource_group_location
   os_type             = "Linux"
   sku_name            = "S3"          // App Service Standard S3
   tags                = var.tags
@@ -217,8 +215,8 @@ resource "azurerm_service_plan" "web" {
 // ------------------------
 resource "azurerm_cognitive_account" "content_safety" {
   name                  = local.cog_cs_name
-  resource_group_name   = azurerm_resource_group.rg.name
-  location              = azurerm_resource_group.rg.location
+  resource_group_name   = local.resource_group_name_effective
+  location              = local.resource_group_location
   kind                  = "ContentSafety"
   sku_name              = "S0"
   custom_subdomain_name = local.cog_cs_name
@@ -227,8 +225,8 @@ resource "azurerm_cognitive_account" "content_safety" {
 
 resource "azurerm_cognitive_account" "document_intelligence" {
   name                  = local.cog_di_name
-  resource_group_name   = azurerm_resource_group.rg.name
-  location              = azurerm_resource_group.rg.location
+  resource_group_name   = local.resource_group_name_effective
+  location              = local.resource_group_location
   kind                  = "FormRecognizer"
   sku_name              = "S0"
   custom_subdomain_name = local.cog_di_name
@@ -237,8 +235,8 @@ resource "azurerm_cognitive_account" "document_intelligence" {
 
 resource "azurerm_cognitive_account" "language" {
   name                  = local.cog_lang_name
-  resource_group_name   = azurerm_resource_group.rg.name
-  location              = azurerm_resource_group.rg.location
+  resource_group_name   = local.resource_group_name_effective
+  location              = local.resource_group_location
   kind                  = "TextAnalytics"
   sku_name              = "S0"
   custom_subdomain_name = local.cog_lang_name
@@ -247,8 +245,8 @@ resource "azurerm_cognitive_account" "language" {
 
 resource "azurerm_cognitive_account" "speech" {
   name                  = local.cog_spch_name
-  resource_group_name   = azurerm_resource_group.rg.name
-  location              = azurerm_resource_group.rg.location
+  resource_group_name   = local.resource_group_name_effective
+  location              = local.resource_group_location
   kind                  = "SpeechServices"
   sku_name              = "S0"
   custom_subdomain_name = local.cog_spch_name
@@ -288,11 +286,19 @@ resource "azurerm_role_assignment" "foundry_cs_user_speech" {
   principal_id         = local.foundry_principal_id
 }
 
-// AI Search -> Search Index Data Contributor
+// AI Search -> Search Index Data Contributor (read/write index data)
 resource "azurerm_role_assignment" "foundry_search_index_contrib" {
-  depends_on          = [azapi_resource.foundry]
+  depends_on           = [azapi_resource.foundry]
   scope                = azurerm_search_service.srch.id
   role_definition_name = "Search Index Data Contributor"
+  principal_id         = local.foundry_principal_id
+}
+
+// AI Search -> Search Service Contributor (create/manage indexes and service)
+resource "azurerm_role_assignment" "foundry_search_service_contrib" {
+  depends_on           = [azapi_resource.foundry]
+  scope                = azurerm_search_service.srch.id
+  role_definition_name = "Search Service Contributor"
   principal_id         = local.foundry_principal_id
 }
 
@@ -315,7 +321,7 @@ resource "azurerm_role_assignment" "foundry_openai_user" {
 // Cosmos DB (NoSQL) -> Cosmos DB Built-in Data Contributor
 resource "azurerm_cosmosdb_sql_role_assignment" "foundry_cosmos_data_contrib" {
   depends_on          = [azapi_resource.foundry]
-  resource_group_name = azurerm_resource_group.rg.name
+  resource_group_name = local.resource_group_name_effective
   account_name        = azurerm_cosmosdb_account.cos.name
   role_definition_id  = "${azurerm_cosmosdb_account.cos.id}/sqlRoleDefinitions/00000000-0000-0000-0000-000000000002"
   principal_id        = local.foundry_principal_id

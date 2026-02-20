@@ -40,6 +40,12 @@ variable "location" {
   }
 }
 
+variable "resource_group_name" {
+  description = "Name of the existing resource group to deploy resources into. Leave empty to use the generated name (must already exist)."
+  type        = string
+  default     = ""
+}
+
 variable "tags" {
   description = "Optional tags applied to all resources."
   type        = map(string)
